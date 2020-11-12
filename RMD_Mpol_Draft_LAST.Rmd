@@ -1,0 +1,483 @@
+---
+html_document: default
+author: "Lucia Patalacci"
+date: "16 April 2019"
+output:
+  html_document:
+    df_print: paged
+pdf_document: default
+title: 'Botanical Characterization and Geographical Origins in the Honey Market: a
+  Bayesian Analysis based on Melissopalynological Features:
+  Complete Analysis MPOL Data'
+---
+```{bash}
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## DATA ANALYSIS
+
+####Run Libraries
+```{r library, include=FALSE}
+library(tidyr)
+library(plyr)
+library(tibble)
+library(caret)
+library(ggplot2)
+library(gmodels)
+library(vcd)
+library(dplyr)
+library(rstan)
+library(readxl)
+library(psych)
+library(cluster)
+library(randomForest)
+library(RColorBrewer)
+```
+
+##Data Loading
+Load Excel files with table: MPOL analysis
+```{r complete, include = FALSE}
+#Data Loading #
+#read xlsx data and save it into dataset
+mpol_data<- read_excel("dataset_completo.xlsx", sheet="MPOL",col_names =TRUE,col_types=NULL,trim_ws=TRUE)
+```
+
+###Data Preparation
+- Make data names legal
+- Handle missing values: they are all set to zero value (absence of pollen type)
+- Drop "ND" levels (entire row) from Geografical Macroarea.geo, and Area.geo
+- Convert categorical features (Geografical Macroarea and Area, Botanical Origin)
+- Remove non useful columns: Sample REF, Analysis TYPE and TOT_CONTA (100%)
+- Round decimal values to 4 digits
+- save new dataset in RData format
+
+```{r CLEANDATA, include = FALSE}
+#make data names legal##
+names(mpol_data) <- make.names(names(mpol_data))
+
+#Handle missing values##
+mpol_data_new <- replace(mpol_data,is.na(mpol_data),0)
+
+#Convert column from chr to factor
+mpol_data_new [, c("Macroarea.geo", "Area.geo","Botanica.acc")]<- lapply(mpol_data_new [, c("Macroarea.geo", "Area.geo","Botanica.acc")],factor)
+
+#check cleaning of datasets
+#head(mpol_data_new,n=5)
+#tail(mpol_data_new,n=5)
+
+# Remove columns REF and TIPO, TOT_CONTA#
+mpol_data_new$REF <- mpol_data_new$TIPO <- mpol_data_new$TOT_STIMA <-NULL
+```
+#####Grouping levels Macroarea.geo 
+A new multi level feature has been created by grouping MacroArea.geo classes  to define classification models
+```{r  RM_AREA_GROUP, echo=FALSE}
+#Group geo
+table(mpol_data_new$Macroarea.geo)
+mpol_data_new <- data.frame(geo.group="geo.group", mpol_data_new, stringsAsFactors = FALSE)
+mpol_data_new$geo.group[mpol_data_new$Macroarea.geo=="Miscela con Est Europa"] = "OtherEurope"
+mpol_data_new$geo.group[mpol_data_new$Macroarea.geo=="Est Europa"]= "OtherEurope"
+mpol_data_new$geo.group[mpol_data_new$Macroarea.geo=="Europa"] = "OtherEurope" 
+mpol_data_new$geo.group[mpol_data_new$Macroarea.geo=="Italia"] = "Italy"
+mpol_data_new$geo.group[mpol_data_new$Macroarea.geo=="Africa"] = "OtherWorld"
+mpol_data_new$geo.group[mpol_data_new$Macroarea.geo=="Oceania"] = "OtherWorld"
+mpol_data_new$geo.group[mpol_data_new$Macroarea.geo=="Asia"] = "OtherWorld"
+mpol_data_new$geo.group[mpol_data_new$Macroarea.geo=="Miscela"] = "OtherWorld"
+mpol_data_new$geo.group[mpol_data_new$Macroarea.geo=="ND"] = "ND"
+mpol_data_new$geo.group[mpol_data_new$Macroarea.geo=="America"] = "OtherWorld"
+mpol_data_new$geo.group<- sapply(mpol_data_new [, "geo.group"],factor)
+table(mpol_data_new$geo.group)
+```
+
+```{r  RM_AREA_GROUP2, echo=FALSE}
+# elimino i livelli "ND"
+mpol_data_new <-subset(mpol_data_new, subset = mpol_data_new$geo.group!="ND")
+mpol_data_new$geo.group<-factor(mpol_data_new$geo.group)
+table(mpol_data_new$geo.group)
+```
+
+```{r  CLEANDATA2, echo=FALSE}
+
+# round decimals for numerical features
+signif(mpol_data_new[,6:222],digits = 4)
+```
+
+#####Botanical.acc
+A new multi level feature has been created by grouping Botanical.acc for higher frequencies classes to define classification models
+```{r  RM_HONEY_TYPE, echo=FALSE}
+#Levels in botanic.acc
+table(mpol_data_new$Botanica.acc)
+levels(mpol_data_new$Botanica.acc)
+
+#############################################################
+#''' ################my trials to group
+#HoneyType<-as.data.frame(table(mpol_data_new$Botanica.acc))
+#str(HoneyType)
+#n<-nrow(HoneyType)
+#{
+#  HoneyType[1:n]
+#for (i in n)
+#  if (HoneyType[i]$Freq<=4)
+#HoneyType$Var1[i]=="MieliRari"
+#else HoneyType$Var1[i]
+#}
+#HoneyType<-as.data.frame(table(mpol_data_new$Botanica.acc))
+#str(HoneyType)
+#HoneyType <- data.frame(HoneyType="HoneyType", HoneyType, stringsAsFactors = FALSE)
+#HoneyType[order(HoneyType$type),]
+#HoneyType$HoneyType[HoneyType$type==1] = "RareHoney"
+#HoneyType$HoneyType[HoneyType$type==2] = "RareHoney"
+#HoneyType$HoneyType[HoneyType$type==3] = "RareHoney"
+#HoneyType$HoneyType[HoneyType$type==4] = "RareHoney"
+#'''
+############################################################
+```
+
+```{r  RM_SAVE DATA, echo=FALSE}
+#save datasets into a file RData#
+save(mpol_data_new, file = "Dataset_MPOL.RData")
+```
+
+##Classification Models on MPOL Type Analysis
+### Descriptive Analysis in MPOL dataset
+```{r MPOL, include= FALSE}
+# MPOL type Classification #
+load("Dataset_MPOL.RData")
+
+#####Data checking#######
+#str(mpol_data_new)
+#check TOT_STIMA column
+#mpol_data_new$mpol_conta_tot <- rowSums(mpol_data_new[7:223])
+#mpol_conta_tot <- rowSums(mpol_data_new[7:223])
+#testdiff<- mpol_data_new$mpol_conta_tot - mpol_data_new$TOT_CONTA 
+```
+
+####Descriptive Statistical Analysis
+```{r MPOL_DES, echo=FALSE}
+#summary of descriptive statistics
+describe(mpol_data_new)
+```
+
+####create new double-level variable group by geographical origin:italian vs foreign and botanical origin
+A new double level feature has been created by grouping in "Italian" and "Foreign" classes the geographical assessed Macro area to define a classification model based on boolean feature
+
+```{r MPOL_BOOL, echo= FALSE}
+#geo.origin <- c()
+mpol_data_new <- data.frame(geo.origin="geo.origin", mpol_data_new, stringsAsFactors = FALSE)
+mpol_data_new$geo.origin[mpol_data_new$Macroarea.geo=="Italia"] = "Italian"
+mpol_data_new$geo.origin[mpol_data_new$Macroarea.geo!="Italia"] = "Foreign"
+mpol_data_new$geo.origin<- sapply(mpol_data_new [, "geo.origin"],factor)
+table(mpol_data_new$geo.origin)
+
+```
+
+```{r ORDERED_GEO_ORIGIN, include = FALSE}
+# re-order levels
+reorder_size <- function(x) {
+  factor(x, levels = names(sort(table(x), decreasing = TRUE)))
+}
+```
+
+###Botanical species frequencies by geo origin: Italian and Foreign
+Below, the frequencies of single botanical types distributed by "Italian" and "Foreign" declared origin and the corresponding mosaic chart that can allow to visualize the data from contingency table: each rectangle and its height represent the proportional value of Honey type by countries.
+```{r MOSAICPLOT, echo = FALSE}
+geo_botanic <-xtabs(~ reorder_size(Botanica.acc) +geo.origin, mpol_data_new)
+geo_botanic
+geo_botanic1 <-xtabs(~  geo.origin + reorder_size(Botanica.acc), mpol_data_new)
+
+#par(mar=c(5, 4, 4, 5) + 0.1)    # Widen right margin slightly, to fit horizontal labels
+mosaicplot(geo_botanic1, main = "Honey type with higher frequency by Country",
+           xlab = "Countries",
+           ylab = "Botanical Type",
+           las = 1,
+           col=brewer.pal(n=length(mpol_data_new$Botanica.acc),name = "Paired"))
+```
+####Some histograms:
+```{r PLOTBOTANICFREQ, echo=FALSE}
+# Histogram on a Categorical variable
+geo1 <- ggplot(mpol_data_new,aes(x=geo.origin))
+geo1 + geom_bar(aes(fill=(reorder_size(mpol_data_new$Honey.type))), width = 0.5) + 
+  theme(axis.text.x = element_text(angle=0, vjust=0.6),
+        axis.text.y = element_text(angle=90, vjust=0.6),legend.position="None") + 
+  labs(title="Honey Type Density",
+         subtitle="Honey Types Grouped by Italian and Foreign Origin",
+         caption="Source: Mpol - Complete Analysis",
+         x="Countries",
+         fill="Botanical Origin")
+```
+###Botanical species and Geographical frequencies histograms
+Below the graphical representation of Geographical distribution histogram, Botanical distribution histogram, respectively ordered by frequencies 
+```{r AREAPLOT, echo = FALSE}
+# Histogram on a Categorical variable
+geo2 <- ggplot(mpol_data_new,aes(x=reorder_size(Macroarea.geo)))
+geo2 + geom_bar(aes(fill=(reorder_size(mpol_data_new$Honey.type))), width = 0.5) + 
+  theme(axis.text.x = element_text(angle=0, vjust=0.6),
+        axis.text.y = element_text(angle=90, vjust=0.6),legend.position="None") + 
+  labs(title="Honey Type Density",
+         subtitle="Honey Types Grouped by Geographical MacroArea",
+         caption="Source: Mpol - Complete Analysis",
+         x="MacroArea",
+         fill="Botanical Origin")
+```
+
+```{r BOTANICAL_ORIGIN, echo = FALSE}
+#barplot by Botanical Origin #####
+# Histogram on a Categorical variable
+bot1 <- ggplot(mpol_data_new,aes(x=reorder_size(Botanica.acc)))
+bot1 + geom_bar(aes(fill=reorder_size(Macroarea.geo)), width = 0.5) + 
+  theme(axis.text.x = element_text(angle=90, vjust=0.6),
+        axis.text.y = element_text(angle=90, vjust=0.6),
+        legend.title = element_text(size=12, color = "salmon", face="bold"),
+        legend.justification=c(0,1), 
+        legend.position=c(0.80, 0.95),
+        legend.background = element_blank(),
+        legend.key = element_blank()) + 
+  labs(title="Honey Type Distribution",
+         legend.position="Top-Left",
+         subtitle="Honey Types Grouped by Geographical MacroArea",
+         caption="Source: Mpol - Complete Analysis",
+         x="Botanical Origin",
+         fill="MacroArea")
+```
+Below, the scatterplot chart of botanical types distributed respectively by double classes and by geographical macro-area
+```{r GEORIGIN.VS.HONEY, echo=FALSE}
+geo_bot<-ggplot(mpol_data_new, aes(x=Botanica.acc, y=Macroarea.geo)) + geom_point()+
+  geom_point(aes(col=Botanica.acc), size=1)+
+  theme(axis.text.x = element_text(angle = 90, hjust =1, size=7),legend.position="None")+
+  labs(title="Honey Type by MacroArea", y="", x="Botanical Origin", caption="Source: Mpol - Complete Analysis")
+plot(geo_bot)
+```
+##Random Forest Models for classification
+
+###Random Forest with class "Italian" and "Foreign" on boolean pollen features (pollen presence/not)
+####Data Transformation and splitting data in training, validation and test sets
+```{r  RANDOMFOREST_BOOL, echo = FALSE }
+#copy dataframe mpol_data_new#
+mpol_data_bool<-mpol_data_new
+#convert frequencies in boolean (0,1)#
+mpol_data_bool[,6:223][mpol_data_bool[,6:223]>0.001] <- 1
+mpol_data_bool[,6:223][mpol_data_bool[,6:223]<=0.001] <- 0
+
+#training, validation and test set#
+set.seed(2205)
+mpol_data_split.b <- sample(1:2, size=nrow(mpol_data_bool), prob=c(0.70,0.30), replace = TRUE)
+mpol_train.b <- mpol_data_bool[mpol_data_split.b==1,]
+mpol_test.b <- mpol_data_bool[mpol_data_split.b==2,]
+```
+####Random Forest Model and Confusion Matrix m=sqrt(218)
+
+```{r RMBOOL_GEO_15, echo=FALSE}
+set.seed(123)
+mpol_rf_classifier.b15 = randomForest(geo.origin ~.-Macroarea.geo -Area.geo -geo.group -Honey.type, data = mpol_train.b, ntree=500, mtry=sqrt(218), importance=TRUE, proximity=TRUE)
+mpol_rf_classifier.b15
+```
+####Random Forest Model and Confusion Matrix m=(218/2)
+```{r  RMBOOL_GEO_108, echo=FALSE}
+#exclude categorical variables (RF model do not accept more than 53)#
+set.seed(5674)
+mpol_rf_classifier.b108 = randomForest(geo.origin ~.-Macroarea.geo -Area.geo -geo.group -Honey.type, data = mpol_train.b, ntree=500, mtry=(218/2), importance=TRUE, proximity=TRUE)
+mpol_rf_classifier.b108
+```
+
+####Random Forest Model and Confusion Matrix m=3
+```{r  RMBOOL_GEO_03, echo=FALSE}
+#exclude categorical variables (RF model do not accept more than 53)#
+set.seed(2345)
+mpol_rf_classifier.b3 = randomForest(geo.origin ~.-Macroarea.geo -Area.geo -geo.group -Honey.type, data = mpol_train.b, ntree=500, mtry=3, importance=TRUE, proximity=TRUE)
+mpol_rf_classifier.b3
+```
+
+```{r  RMBOOL_GEO_PLOT, echo=FALSE}
+layout(matrix(c(1,2),nrow=1),
+       width=c(4,1)) 
+par(mar=c(5,4,4,0)) #No margin on the right side
+plot(mpol_rf_classifier.b15, log="y", main="RF Classifier Boolean with 15 variables")
+par(mar=c(5,0,4,2)) #No margin on the left side
+plot(c(0,1),type="n", axes=F, xlab="", ylab="")
+legend("topleft", colnames(mpol_rf_classifier.b15$err.rate),col=1:4,cex=0.8,fill=1:4)
+```
+
+######Pollen Type importance in classification
+```{r  RMBOOL_GEO15 IMPORTANCE, echo=FALSE}
+#importance(mpol_rf_classifier.b15)
+varImpPlot(mpol_rf_classifier.b15,main="Pollen Type Importance for Class:Italian vs Foreign - 15 var") 
+```
+
+######Pollen Type importance in classification
+```{r  RMBOOL_GEO108 IMPORTANCE, echo=FALSE}
+#importance(mpol_rf_classifier.b108)
+varImpPlot(mpol_rf_classifier.b108,main="Pollen Type Importance for Class:Italian vs Foreign 108 var")
+```
+
+######Pollen Type importance in classification
+```{r  RMBOOL_GEO3 IMPORTANCE, echo=FALSE}
+#importance(mpol_rf_classifier.b3)
+varImpPlot(mpol_rf_classifier.b3,main="Pollen Type Importance for Class:Italian vs Foreign 3 var")
+```
+
+### Validation set assessment on Random Forest on Classes "Italian" and "Foreign": looking at confusion matrix
+##### RF 15 predictors
+```{r  RMBOOL_VALID15, echo=FALSE}
+validation_RF_hat.b <- predict(mpol_rf_classifier.b15, newdata=mpol_test.b[,-1], type="class")
+mean(validation_RF_hat.b == mpol_test.b[,1])
+confusionMatrix(mpol_test.b[,1],validation_RF_hat.b)
+```
+##### RF 109 predictors
+```{r  RMBOOL_VALID108, echo=FALSE}
+validation_RF_hat.b1 <- predict(mpol_rf_classifier.b108, newdata=mpol_test.b[,-1], type="class")
+mean(validation_RF_hat.b1 == mpol_test.b[,1])
+confusionMatrix(mpol_test.b[,1],validation_RF_hat.b1)
+```
+##### RF 3 predictors
+```{r  RMBOOL_VALID03, echo=FALSE}
+validation_RF_hat.b2 <- predict(mpol_rf_classifier.b3, newdata=mpol_test.b[,-1], type="class")
+mean(validation_RF_hat.b == mpol_test.b[,1])
+confusionMatrix(mpol_test.b[,1],validation_RF_hat.b2)
+```
+
+###Random Forest on Geografical Classification (Feature"geo.group") 
+##### RF 15 predictors geoarea
+```{r RF_GROUP15, echo=FALSE}
+##exclude categorical variables (RF model do not accept more than 53)#
+set.seed(3489)
+mpol_rf_classifier.b15g = randomForest(geo.group ~.-Macroarea.geo -Area.geo -geo.origin -Honey.type, data=mpol_train.b, ntree=500, mtry=sqrt(218), importance=TRUE,proximity=TRUE)
+mpol_rf_classifier.b15g
+```
+##### RF 109 predictors geoarea
+```{r  RF108_GROUP, echo=FALSE}
+##exclude categorical variables (RF model do not accept more than 53)#
+set.seed(2001)
+mpol_rf_classifier.b108g = randomForest(geo.group ~.-Macroarea.geo -Area.geo -geo.origin -Honey.type, data =  mpol_train.b, ntree=500, mtry=218/2, importance=TRUE,proximity=TRUE)
+mpol_rf_classifier.b108g
+```
+##### RF 3 predictors geoarea
+```{r  RF03_GROUP, echo=FALSE}
+##exclude categorical variables (RF model do not accept more than 53)#
+set.seed(4553)
+mpol_rf_classifier.b3g = randomForest(geo.group ~.-Macroarea.geo -Area.geo -geo.origin -Honey.type, data = mpol_train.b, ntree=500, mtry=3, importance=TRUE,proximity=TRUE)
+mpol_rf_classifier.b3g
+```
+
+```{r  RANDOMFORESTMOD_GROUP_PLOT, echo=FALSE}
+layout(matrix(c(1,2),nrow=1),
+       width=c(4,1)) 
+par(mar=c(5,4,4,0)) #No margin on the right side
+plot(mpol_rf_classifier.b15g, log="y", main="RF Classifier Class:Geo Macro Area with 15 var" )
+par(mar=c(5,0,4,2)) #No margin on the left side
+plot(c(0,1),type="n", axes=F, xlab="", ylab="")
+legend("topleft", colnames(mpol_rf_classifier.b15g$err.rate),col=1:11,cex=0.8,fill=1:4)
+```
+
+```{r  RANDOMFORESTMOD_AREA_IMPORTANCE, echo=FALSE}
+#importance(mpol_rf_classifier.b1)
+varImpPlot(mpol_rf_classifier.b15g, main="Pollen Type Importance Class:Geo Macro Area with 15 vars")
+```
+
+### Validation set assessment on Random Forest on Classes "Italian" and "Foreign": looking at confusion matrix
+##### RF 15 predictors
+```{r  RMBOOLAREA_VALID15, echo=FALSE}
+validation_RF_hat.bg <- predict(mpol_rf_classifier.b15g, newdata=mpol_test.b[,-2], type="class")
+mean(validation_RF_hat.bg == mpol_test.b[,2])
+confusionMatrix(mpol_test.b[,2],validation_RF_hat.bg)
+```
+##### RF 109 predictors
+```{r  RMBOOLAREA_VALID108, echo=FALSE}
+validation_RF_hat.b1g <- predict(mpol_rf_classifier.b108g, newdata=mpol_test.b[,-2], type="class")
+mean(validation_RF_hat.b1g == mpol_test.b[,2])
+confusionMatrix(mpol_test.b[,2],validation_RF_hat.b1g)
+```
+##### RF 3 predictors
+```{r  RMBOOLAREA_VALID03, echo=FALSE}
+validation_RF_hat.b2g <- predict(mpol_rf_classifier.b3g, newdata=mpol_test.b[,-2], type="class")
+mean(validation_RF_hat.b2g == mpol_test.b[,2])
+confusionMatrix(mpol_test.b[,2],validation_RF_hat.b2g)
+```
+###Random Forest with typeuencies
+####Random Forest on Classes "Italian" and "Foreign"
+#####Splitting data in training, validation and test sets
+```{r  RMtype_GEO15_SPLIT, echo=FALSE}
+#training, validation and test set#
+set.seed(2205)
+mpol_data_split <- sample(1:2, size=nrow(mpol_data_new), prob=c(0.7,0.3), replace = TRUE)
+mpol_train <- mpol_data_new[mpol_data_split==1,]
+mpol_test <- mpol_data_new[mpol_data_split==2,]
+```
+#####RF 15 PREDICTORS
+```{r  RMFREQ_BOOL15, echo=FALSE}
+#exclude categorical variables (RF model do not accept more than 53)#
+set.seed(123)
+mpol_rf_classifier.f15 = randomForest(geo.origin ~ .-Macroarea.geo -geo.group -Area.geo -Honey.type, data = mpol_train, ntree=500, mtry=sqrt(218), importance=TRUE,proximity=TRUE)
+mpol_rf_classifier.f15
+```
+#####RF 109 PREDICTORS
+```{r  RMFREQ_GEO108, echo=FALSE}
+#exclude categorical variables (RF model do not accept more than 53)#
+set.seed(123)
+mpol_rf_classifier.f108 = randomForest(geo.origin ~ .-Macroarea.geo -geo.group -Area.geo -Honey.type, data = mpol_train, ntree=500, mtry=2180/2, importance=TRUE,proximity=TRUE)
+mpol_rf_classifier.f108
+```
+#####RF 3 PREDICTORS
+```{r  RMFREQ_GEO3, echo=FALSE}
+#exclude categorical variables (RF model do not accept more than 53)#
+set.seed(123)
+mpol_rf_classifier.f3 = randomForest(geo.origin ~ .-Macroarea.geo -geo.group -Area.geo -Honey.type, data = mpol_train, ntree=500, mtry=3, importance=TRUE,proximity=TRUE)
+mpol_rf_classifier.f3
+```
+
+```{r  RMFREQ_GEO15, echo=FALSE}
+layout(matrix(c(1,2),nrow=1),
+       width=c(4,1)) 
+par(mar=c(5,4,4,0)) #No margin on the right side
+plot(mpol_rf_classifier.f15, log="y", main="RF Classifier on Frequency class:Italian vs Foreign 15 var ")
+par(mar=c(5,0,4,2)) #No margin on the left side
+plot(c(0,1),type="n", axes=F, xlab="", ylab="")
+legend("topleft", colnames(mpol_rf_classifier.f15$err.rate),col=1:4,cex=0.8,fill=1:4)
+```
+
+#### Features importance on RF Model with classes Italian and Foreign
+```{r  RMFREQ_GEO15_IMPORTANCE, echo=FALSE}
+#importance(mpol_rf_classifier)
+varImpPlot(mpol_rf_classifier.f15, main="Pollen Type Frequency Importance on Classes 15 var")
+```
+### Validation set assessment on Random Forest on Classes "Italian" and "Foreign": looking at confusion matrix
+```{r  RMFREQ_GEO15_VALID, echo=FALSE}
+validation_RF_hat.f <- predict(mpol_rf_classifier.f15, newdata=mpol_test[,-1], type="class")
+mean(validation_RF_hat.f == mpol_test[,1])
+confusionMatrix(mpol_test[,1],validation_RF_hat.f)
+```
+
+```{r  RMFREQ_GEO108_VALID, echo=FALSE}
+validation_RF_hat.f1 <- predict(mpol_rf_classifier.f108, newdata=mpol_test[,-1], type="class")
+mean(validation_RF_hat.f1 == mpol_test[,1])
+confusionMatrix(mpol_test[,1],validation_RF_hat.f1)
+```
+
+```{r  RMFREQ_GEO3_VALID, echo=FALSE}
+validation_RF_hat.f2 <- predict(mpol_rf_classifier.f3, newdata=mpol_test[,-1], type="class")
+mean(validation_RF_hat.f2 == mpol_test[,1])
+confusionMatrix(mpol_test[,1],validation_RF_hat.f2)
+```
+
+####RANDOM FOREST WITH 10-FOLD CV 10 TIMES
+```{r  RANDOMFORESTMOD_10CV, echo=FALSE}
+ctrl <-trainControl(method="repeatedcv",
+                    number = 10, repeats = 10)
+grid_rf <- expand.grid(.mtry = c(2,5,10,15,20))
+
+set.seed(2402)
+cv_rf_classifier_10<- train(geo.origin ~ .-Macroarea.geo -geo.group -Area.geo -Honey.freq, data = mpol_data_new, method = "rf",
+                         metric = "Kappa", trControl = ctrl, 
+                         tuneGrid = grid_rf)
+cv_rf_classifier_10
+```
+#####Plot of RF classifier 10_CV 10 times 
+```{r  RANDOMFORESTPLOT_10CV, echo=FALSE}
+#layout(matrix(c(1,2),nrow=1),
+       #width=c(4,1)) 
+#par(mar=c(5,4,4,0)) #No margin on the right side
+plot(cv_rf_classifier_10, log="y", main="Kappa Measure vs No.of Selected Predictors")
+#par(mar=c(5,0,4,2)) #No margin on the left side
+#plot(c(0,1),type="n", axes=F, xlab="", ylab="")
+```
